@@ -1,2 +1,32 @@
 *.dat
 *.zip
+.Rproj.user
+
+
+# RMarkdown cache & auxiliary folders
+*_cache/
+*_files/
+*.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# VS Code junk
+.vscode/
+
+# RStudio junk
+.Rproj.user/
+
+# MacOS junk
+.DS_Store
+
+# LaTeX build files (if rendering to PDF)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+# knitr session files
+cache/
+figure/
