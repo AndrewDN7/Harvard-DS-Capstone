@@ -30,3 +30,11 @@
 # knitr session files
 cache/
 figure/
+
+
+# 
+*.csv
+
+#
+data
+
