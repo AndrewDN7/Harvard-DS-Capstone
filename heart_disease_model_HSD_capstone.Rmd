@@ -1,0 +1,318 @@
+---
+title: 'Harvard Data Science Capstone: Heart Disease Prediction Model'
+author: "Andrea De Nardi"
+date: "2025-12-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+###
+### Installing packages
+###
+
+required_packages <- c(
+  "readr",
+  "dplyr",
+  "janitor",
+  "caret",
+  "tidyverse"
+)
+
+# Install any missing packages
+missing_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages, dependencies = TRUE)
+}
+
+# Load packages
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+
+
+###
+### Load Data
+###
+
+data_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data"
+
+# Local path to save
+data_path <- "data/processed_cleveland.csv"
+
+# Create data folder if needed
+if (!dir.exists("data")) dir.create("data")
+
+# Download only if not present (reproducible, avoids repeated downloads)
+if (!file.exists(data_path)) {
+  download.file(data_url, destfile = data_path, mode = "wb")
+}
+
+# Load the dataset
+heart_raw <- read_csv(
+  data_path,
+  col_names = FALSE,
+  na = "?"
+)
+
+# Clean up column names
+colnames(heart_raw) <- c(
+  "age", "sex", "cp", "trestbps", "chol",
+  "fbs", "restecg", "thalach", "exang", "oldpeak",
+  "slope", "ca", "thal", "target"
+)
+
+heart <- heart_raw %>% 
+  clean_names() %>% 
+  mutate(target = ifelse(target > 0, 1, 0))  # Convert to binary classification
+
+# Convert columns to factor
+heart <- heart %>%
+  mutate(
+    sex     = factor(sex, levels = c(0,1), labels = c("female","male")),
+    cp      = factor(cp),
+    fbs     = factor(fbs),
+    restecg = factor(restecg),
+    exang   = factor(exang),
+    slope   = factor(slope),
+    ca      = factor(ca),
+    thal    = factor(thal),
+    target_numeric = target,
+    target  = factor(target, levels = c(0,1), labels = c("no_disease","disease"))
+  )
+
+
+
+```
+
+## Introduction
+
+Cardiovascular diseases (CVDs) are a major public health concern, and one of the leading causes of death globally. World Health Organization estimates that 19.8 million people died from CVDs in 2022, representing about a third of all deaths globally (WHO CVDs, 2022). Given the burden of CVDs on mortality and healthcare systems, early detection and targeted care are critical challenges. In this project, we will be using the UCI "Cleveland Heart" dataset (Dua & Graff, 2019) to train machine learning models that predict the presence of heart disease from a set of physiological measures. We will start our analysis by producing a set of visualization that will help us understand what clinical measures can successfully predict the risk of heart disease. Our modeling approach will include simple linear models, classic and penalized logistic regression, decision trees, and final model selection via cross-validation and threshold tuning.
+
+### Variables Definition
+
+Before jumping into our analysis, it is important to define the variables of the Cleveland Heart Dataset (Kaggle, Heart Disease Dataset content description):
+
+-   Age: Patients Age in years (Numeric)
+
+-   Sex: Gender (Male : 1; Female : 0) (Nominal)
+
+-   cp: Type of chest pain experienced by patient. This term categorized into 4 category.\
+    0 typical angina, 1 atypical angina, 2 non- anginal pain, 3 asymptomatic (Nominal)
+
+-   trestbps: patient's level of blood pressure at resting mode in mm/HG (Numerical)
+
+-   chol: Serum cholesterol in mg/dl (Numeric)
+
+-   fbs: Blood sugar levels on fasting \> 120 mg/dl represents as 1 in case of true and 0 as false (Nominal)
+
+-   restecg: Result of electrocardiogram while at rest are represented in 3 distinct values\
+    0 : Normal 1: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of \> 0.05 mV)\
+    2: showing probable or definite left ventricular hypertrophyby Estes' criteria (Nominal)
+
+-   thalach: Maximum heart rate achieved (Numeric)
+
+-   exang: Angina induced by exercise 0 depicting NO 1 depicting Yes (Nominal)
+
+-   oldpeak: Exercise induced ST-depression in relative with the state of rest (Numeric)
+
+-   slope: ST segment measured in terms of slope during peak exercise\
+    0: up sloping; 1: flat; 2: down sloping(Nominal)
+
+-   ca: The number of major vessels (0–3)(nominal)
+
+-   thal: A blood disorder called thalassemia\
+    0: NULL 1: normal blood flow 2: fixed defect (no blood flow in some part of the heart) 3: reversible defect (a blood flow is observed but it is not normal(nominal)
+
+-   target: It is the target variable which we have to predict 1 means patient is suffering from heart disease and 0 means patient is normal.
+
+### Data Wrangling
+
+Prior to modeling, several preprocessing steps were applied to prepare the dataset for analysis. The original `target` variable in the UCI Cleveland Heart dataset is coded as 0 or 1, indicating the absence or presence of heart disease. For interpretability and to support classification workflows in `caret`, this variable was converted into a labeled factor with levels `"no_disease"` and `"disease"`. All categorical predictors (e.g. chest pain type, resting ECG results, exercise-induced angina, slope, thal, and the number of major vessels) were also recoded as factors to ensure they were correctly handled by algorithms that distinguish between nominal and numeric inputs. In addition to the categorical target, we created a secondary numeric outcome variable, `target_numeric`, which retains the original 0/1 encoding. This version of the target was used for exploratory data analysis tasks such as computing correlations, where numeric encoding is required. These preprocessing steps ensured that the dataset was properly structured for both statistical modeling and exploratory analyses.
+
+## Analysis
+
+### Exploratory Data Analysis
+
+Let us take a look at the summary statistics of the variables from our dataset:
+
+```{r}
+summary(heart)
+```
+
+The final dataset contains 303 patients, with a mean age of approximately 54 years (range 29–77). The sample includes 206 males and 97 females. Heart disease is present in 139 patients (46%) and absent in 164 patients (54%), reflecting a reasonably balanced outcome distribution. Several clinical measurements show substantial variability, including resting blood pressure (94–200 mmHg), cholesterol levels (126–564 mg/dl), and maximum heart rate achieved (71–202 bpm). Categorical predictors such as chest pain type, resting ECG results, exercise-induced angina, the number of major vessels observed via fluoroscopy, and thallium stress test results also exhibit diverse distributions across levels. A small number of missing values is present in the thal and ca variables, which will need to be handled before modelling. Overall, the dataset provides a heterogeneous set of demographic, clinical, and physiological features suitable for predicting heart disease. Let us now visualize the relationships between the predictors and the dependent variable.
+
+**Demographic Factors**
+
+```{r, echo=FALSE}
+# Consistent fill colors for heart disease status
+disease_colors <- c("no_disease" = "steelblue", "disease" = "firebrick")
+
+# Histogram of age filled by disease
+ggplot(heart, aes(x = age, fill = target)) +
+  geom_histogram(binwidth = 5, color = "white", alpha = 0.8) +
+  scale_fill_manual(values = disease_colors, name = "Disease") +
+  labs(title = "Distribution of Age by Heart Disease",
+       x = "Age",
+       y = "Count") +
+  theme_minimal()
+
+# Proportion of heart disease cases by sex
+ggplot(heart, aes(x = sex, fill = target)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = disease_colors, name = "Disease") +
+  labs(title = "Heart Disease Frequency by Sex",
+       x = "Sex",
+       y = "Proportion") +
+  theme_minimal()
+```
+
+The above histograms shows the distribution of age and sex in our dataset. The bins have been colored to reflect the diagnosis within each group (disease = red, no disease = blue). A pattern seems to be emerge, and to indicate that there is a positive relationship between age and heart disease diagnosis, although the strength of the link appears to weaken after 70 years (perhaps due to survivorship bias). In addition, male seem to be more prone to heart disease than women.
+
+**Chest Pain and ECG-Related Predictors**
+
+```{r, echo=FALSE}
+# Chest pain
+
+ggplot(heart, aes(x = cp, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Chest Pain Type by Heart Disease Outcome",
+x = "Chest Pain Type",
+y = "Proportion") +
+theme_minimal()
+
+# Resting ECG vs heart disease
+
+ggplot(heart, aes(x = restecg, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Resting ECG",
+x = "Rest ECG (0,1,2)",
+y = "Proportion") +
+theme_minimal()
+
+# Exercise-induced angina vs heart disease
+
+ggplot(heart, aes(x = exang, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Exercise-Induced Angina",
+x = "Exang (0 = No, 1 = Yes)",
+y = "Proportion") +
+theme_minimal()
+
+# Slope vs heart disease
+
+ggplot(heart, aes(x = slope, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by ST Segment Slope",
+x = "Slope (0–2)",
+y = "Proportion") +
+theme_minimal()
+```
+
+The graphs show that chest pain type #4 and resting ECG's of type 1 (having ST-T wave abnormality) are associated with higher risks of heart disease. In addition, the presence of chest pain during exercise (Exang = 1) and flat or negativs ST Segment Slope are associated with higher risks of CVDs.
+
+**Clinical Risk Factors**
+
+```{r, echo=FALSE} 
+# Cholesterol levels by heart disease status
+
+ggplot(heart, aes(x = target, y = chol, fill = target)) +
+geom_boxplot() +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Cholesterol Levels vs Heart Disease",
+x = "Disease",
+y = "Cholesterol (mg/dl)") +
+theme_minimal()
+
+# Fasting blood sugar vs heart disease
+
+ggplot(heart, aes(x = fbs, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Fasting Blood Sugar",
+x = "FBS (0 = Normal, 1 = High)",
+y = "Proportion") +
+theme_minimal()
+
+# Max heart rate
+
+ggplot(heart, aes(x = thalach, fill = target)) +
+geom_histogram(binwidth = 10, color = "white", alpha = 0.8) +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Distribution of Max Heart Rate by Heart Disease",
+x = "Max Heart Rate (thalach)",
+y = "Count") +
+theme_minimal()
+```
+
+The visualizations seem to indicate a moderate positive relationship between cholesterol levels and disease prevalence (higher summary statistics for cholesterol levels within the disease group). In addition, there is a modest difference in heart disease prevalence between normal and high fasting blood sugar groups (slightly higher for high FBS group). Maximum heart rate appears to be a solid predictor of heart disease outcome, with a significantly higher prevalence of heart disease for lower levels of thalach.
+
+**Imaging Based Predictors**
+
+```{r, echo=FALSE}
+# Major vessels colored by fluoroscopy vs heart disease
+
+ggplot(heart, aes(x = ca, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Number of Major Vessels (ca)",
+x = "CA (0–3)",
+y = "Proportion") +
+theme_minimal()
+
+# Thalassemia vs heart disease
+
+ggplot(heart, aes(x = thal, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Thalassemia Type",
+x = "Thal (3 = Normal, 6 = Fixed Defect, 7 = Reversible Defect)",
+y = "Proportion") +
+theme_minimal()
+
+```
+
+The plots show a positive relationship between heart disease proportion and number of major vessels, as well as a higher heart disease prevalence among the groups with fixed defect and reversible defect thalassemia types.
+
+**Correlations Between Numeric Predictors and Outcome**
+
+```{r, echo=FALSE}
+# Correlation heatmap using only numeric predictors
+
+numeric_vars <- heart %>% dplyr::select(where(is.numeric))
+
+corr_matrix <- round(cor(numeric_vars, use = "complete.obs"), 2)
+
+if (!requireNamespace("reshape2", quietly = TRUE)) {
+install.packages("reshape2")
+}
+library(reshape2)
+
+corr_long <- melt(corr_matrix)
+
+ggplot(corr_long, aes(Var1, Var2, fill = value)) +
+geom_tile(color = "white") +
+geom_text(aes(label = value), color = "black", size = 3) +
+scale_fill_gradient2(low = "steelblue", high = "firebrick", mid = "white", midpoint = 0) +
+labs(title = "Correlation Heatmap for Numeric Predictors and Outcome",
+x = "",
+y = "") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The correlation matrix shows that thalach (maximum heart rate) is moderately negatively correlated with heart disease (−0.42), indicating that patients achieving lower exercise heart rates are more likely to have the condition. In contrast, variables such as oldpeak, age, and resting blood pressure show weak positive correlations with disease (around 0.15–0.22), suggesting only mild linear associations. Overall, no single numeric predictor is strongly correlated with the outcome, supporting the need for multivariate modeling rather than relying on individual variables.
+
+### Modelling
+
+## Results
+
+## Conclusion
+
+## References
