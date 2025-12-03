@@ -458,3 +458,54 @@ final_cm <- confusionMatrix(
 )
 
 print(final_cm)
+
+
+# Load knitr for kable
+if (!requireNamespace("knitr", quietly = TRUE)) {
+  install.packages("knitr")
+}
+library(knitr)
+
+# Extract metrics from each confusion matrix
+model_metrics <- data.frame(
+  Model = c("Linear Regression", 
+            "Logistic Regression (GLM)",
+            "Decision Tree (rpart)",
+            "Penalized Logistic Regression (glmnet)"),
+  
+  Accuracy = c(
+    cm$overall["Accuracy"],
+    glm_cm$overall["Accuracy"],
+    tree_cm$overall["Accuracy"],
+    glmnet_cm$overall["Accuracy"]
+  ),
+  
+  Sensitivity = c(
+    cm$byClass["Sensitivity"],
+    glm_cm$byClass["Sensitivity"],
+    tree_cm$byClass["Sensitivity"],
+    glmnet_cm$byClass["Sensitivity"]
+  ),
+  
+  Specificity = c(
+    cm$byClass["Specificity"],
+    glm_cm$byClass["Specificity"],
+    tree_cm$byClass["Specificity"],
+    glmnet_cm$byClass["Specificity"]
+  ),
+  
+  Balanced_Accuracy = c(
+    cm$byClass["Balanced Accuracy"],
+    glm_cm$byClass["Balanced Accuracy"],
+    tree_cm$byClass["Balanced Accuracy"],
+    glmnet_cm$byClass["Balanced Accuracy"]
+  )
+)
+
+# Print nicely with kable
+kable(
+  model_metrics,
+  digits = 3,
+  caption = "Comparison of Model Performance Metrics"
+)
+

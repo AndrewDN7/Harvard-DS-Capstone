@@ -1,0 +1,720 @@
+---
+title: 'Harvard Data Science Capstone: Heart Disease Prediction Model'
+author: "Andrea De Nardi"
+date: "2025-12-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+###
+### Installing packages
+###
+
+required_packages <- c(
+  "readr",
+  "dplyr",
+  "janitor",
+  "caret",
+  "tidyverse"
+)
+
+# Install any missing packages
+missing_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages, dependencies = TRUE)
+}
+
+# Load packages
+invisible(lapply(required_packages, library, character.only = TRUE))
+
+
+
+###
+### Load Data
+###
+
+data_url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data"
+
+# Local path to save
+data_path <- "data/processed_cleveland.csv"
+
+# Create data folder if needed
+if (!dir.exists("data")) dir.create("data")
+
+# Download only if not present (reproducible, avoids repeated downloads)
+if (!file.exists(data_path)) {
+  download.file(data_url, destfile = data_path, mode = "wb")
+}
+
+# Load the dataset
+heart_raw <- read_csv(
+  data_path,
+  col_names = FALSE,
+  na = "?"
+)
+
+# Clean up column names
+colnames(heart_raw) <- c(
+  "age", "sex", "cp", "trestbps", "chol",
+  "fbs", "restecg", "thalach", "exang", "oldpeak",
+  "slope", "ca", "thal", "target"
+)
+
+heart <- heart_raw %>% 
+  clean_names() %>% 
+  mutate(target = ifelse(target > 0, 1, 0))  # Convert to binary classification
+
+# Convert columns to factor
+heart <- heart %>%
+  mutate(
+    sex     = factor(sex, levels = c(0,1), labels = c("female","male")),
+    cp      = factor(cp),
+    fbs     = factor(fbs),
+    restecg = factor(restecg),
+    exang   = factor(exang),
+    slope   = factor(slope),
+    ca      = factor(ca),
+    thal    = factor(thal),
+    target_numeric = target,
+    target  = factor(target, levels = c(0,1), labels = c("no_disease","disease"))
+  )
+
+
+
+```
+
+## Introduction
+
+Cardiovascular diseases (CVDs) are a major public health concern, and one of the leading causes of death globally. World Health Organization estimates that 19.8 million people died from CVDs in 2022, representing about a third of all deaths globally (WHO CVDs, 2022). Given the burden of CVDs on mortality and healthcare systems, early detection and targeted care are critical challenges. In this project, we will be using the UCI "Cleveland Heart" dataset (Dua & Graff, 2019) to train machine learning models that predict the presence of heart disease from a set of physiological measures. We will start our analysis by producing a set of visualization that will help us understand what clinical measures can successfully predict the risk of heart disease. Our modeling approach will include simple linear models, classic and penalized logistic regression, decision trees, and final model selection via cross-validation and threshold tuning.
+
+### Variables Definition
+
+Before jumping into our analysis, it is important to define the variables of the Cleveland Heart Dataset (Kaggle, Heart Disease Dataset content description):
+
+-   "Age: Patients Age in years (Numeric)
+
+-   Sex: Gender (Male : 1; Female : 0) (Nominal)
+
+-   cp: Type of chest pain experienced by patient. This term categorized into 4 category.\
+    0 typical angina, 1 atypical angina, 2 non- anginal pain, 3 asymptomatic (Nominal)
+
+-   trestbps: patient's level of blood pressure at resting mode in mm/HG (Numerical)
+
+-   chol: Serum cholesterol in mg/dl (Numeric)
+
+-   fbs: Blood sugar levels on fasting \> 120 mg/dl represents as 1 in case of true and 0 as false (Nominal)
+
+-   restecg: Result of electrocardiogram while at rest are represented in 3 distinct values\
+    0 : Normal 1: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of \> 0.05 mV)\
+    2: showing probable or definite left ventricular hypertrophyby Estes' criteria (Nominal)
+
+-   thalach: Maximum heart rate achieved (Numeric)
+
+-   exang: Angina induced by exercise 0 depicting NO 1 depicting Yes (Nominal)
+
+-   oldpeak: Exercise induced ST-depression in relative with the state of rest (Numeric)
+
+-   slope: ST segment measured in terms of slope during peak exercise\
+    0: up sloping; 1: flat; 2: down sloping(Nominal)
+
+-   ca: The number of major vessels (0–3)(nominal)
+
+-   thal: A blood disorder called thalassemia\
+    0: NULL 1: normal blood flow 2: fixed defect (no blood flow in some part of the heart) 3: reversible defect (a blood flow is observed but it is not normal(nominal)
+
+-   target: It is the target variable which we have to predict 1 means patient is suffering from heart disease and 0 means patient is normal."
+
+### Data Wrangling
+
+Prior to modeling, several preprocessing steps were applied to prepare the dataset for analysis. The original `target` variable in the UCI Cleveland Heart dataset is coded as 0 or 1, indicating the absence or presence of heart disease. For interpretability and to support classification workflows in `caret`, this variable was converted into a labeled factor with levels `"no_disease"` and `"disease"`. All categorical predictors (e.g. chest pain type, resting ECG results, exercise-induced angina, slope, thal, and the number of major vessels) were also recoded as factors to ensure they were correctly handled by algorithms that distinguish between nominal and numeric inputs. In addition to the categorical target, we created a secondary numeric outcome variable, `target_numeric`, which retains the original 0/1 encoding. This version of the target was used for exploratory data analysis tasks such as computing correlations, where numeric encoding is required. These preprocessing steps ensured that the dataset was properly structured for both statistical modeling and exploratory analyses.
+
+## Analysis
+
+### Exploratory Data Analysis
+
+Let us take a look at the summary statistics of the variables from our dataset:
+
+```{r}
+summary(heart)
+```
+
+The final dataset contains 303 patients, with a mean age of approximately 54 years (range 29–77). The sample includes 206 males and 97 females. Heart disease is present in 139 patients (46%) and absent in 164 patients (54%), reflecting a reasonably balanced outcome distribution. Several clinical measurements show substantial variability, including resting blood pressure (94–200 mmHg), cholesterol levels (126–564 mg/dl), and maximum heart rate achieved (71–202 bpm). Categorical predictors such as chest pain type, resting ECG results, exercise-induced angina, the number of major vessels observed via fluoroscopy, and thallium stress test results also exhibit diverse distributions across levels. A small number of missing values is present in the thal and ca variables, which will need to be handled before modelling. Overall, the dataset provides a heterogeneous set of demographic, clinical, and physiological features suitable for predicting heart disease. Let us now visualize the relationships between the predictors and the dependent variable.
+
+**Demographic Factors**
+
+```{r, echo=FALSE, fig.height=3}
+# Consistent fill colors for heart disease status
+disease_colors <- c("no_disease" = "steelblue", "disease" = "firebrick")
+
+# Histogram of age filled by disease
+ggplot(heart, aes(x = age, fill = target)) +
+  geom_histogram(binwidth = 5, color = "white", alpha = 0.8) +
+  scale_fill_manual(values = disease_colors, name = "Disease") +
+  labs(title = "Distribution of Age by Heart Disease",
+       x = "Age",
+       y = "Count") +
+  theme_minimal()
+
+# Proportion of heart disease cases by sex
+ggplot(heart, aes(x = sex, fill = target)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = disease_colors, name = "Disease") +
+  labs(title = "Heart Disease Frequency by Sex",
+       x = "Sex",
+       y = "Proportion") +
+  theme_minimal()
+```
+
+The above histograms shows the distribution of age and sex in our dataset. The bins have been colored to reflect the diagnosis within each group (disease = red, no disease = blue). A pattern seems to be emerge, and to indicate that there is a positive relationship between age and heart disease diagnosis, although the strength of the link appears to weaken after 70 years (perhaps due to survivorship bias). In addition, male seem to be more prone to heart disease than women.
+
+**Chest Pain and ECG-Related Predictors**
+
+```{r, echo=FALSE, fig.height=3}
+# Chest pain
+
+ggplot(heart, aes(x = cp, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Chest Pain Type by Heart Disease Outcome",
+x = "Chest Pain Type",
+y = "Proportion") +
+theme_minimal()
+
+# Resting ECG vs heart disease
+
+ggplot(heart, aes(x = restecg, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Resting ECG",
+x = "Rest ECG (0,1,2)",
+y = "Proportion") +
+theme_minimal()
+
+# Exercise-induced angina vs heart disease
+
+ggplot(heart, aes(x = exang, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Exercise-Induced Angina",
+x = "Exang (0 = No, 1 = Yes)",
+y = "Proportion") +
+theme_minimal()
+
+# Slope vs heart disease
+
+ggplot(heart, aes(x = slope, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by ST Segment Slope",
+x = "Slope (0–2)",
+y = "Proportion") +
+theme_minimal()
+```
+
+The graphs show that chest pain type #4 and resting ECG's of type 1 (having ST-T wave abnormality) are associated with higher risks of heart disease. In addition, the presence of chest pain during exercise (Exang = 1) and flat or negativs ST Segment Slope are associated with higher risks of CVDs.
+
+**Clinical Risk Factors**
+
+```{r, echo=FALSE, fig.height=3}
+# Cholesterol levels by heart disease status
+
+ggplot(heart, aes(x = target, y = chol, fill = target)) +
+geom_boxplot() +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Cholesterol Levels vs Heart Disease",
+x = "Disease",
+y = "Cholesterol (mg/dl)") +
+theme_minimal()
+
+# Fasting blood sugar vs heart disease
+
+ggplot(heart, aes(x = fbs, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Fasting Blood Sugar",
+x = "FBS (0 = Normal, 1 = High)",
+y = "Proportion") +
+theme_minimal()
+
+# Max heart rate
+
+ggplot(heart, aes(x = thalach, fill = target)) +
+geom_histogram(binwidth = 10, color = "white", alpha = 0.8) +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Distribution of Max Heart Rate by Heart Disease",
+x = "Max Heart Rate (thalach)",
+y = "Count") +
+theme_minimal()
+```
+
+The visualizations seem to indicate a moderate positive relationship between cholesterol levels and disease prevalence (higher summary statistics for cholesterol levels within the disease group). In addition, there is a modest difference in heart disease prevalence between normal and high fasting blood sugar groups (slightly higher for high FBS group). Maximum heart rate appears to be a solid predictor of heart disease outcome, with a significantly higher prevalence of heart disease for lower levels of thalach.
+
+**Imaging Based Predictors**
+
+```{r, echo=FALSE, fig.height=3}
+# Major vessels colored by fluoroscopy vs heart disease
+
+ggplot(heart, aes(x = ca, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Number of Major Vessels (ca)",
+x = "CA (0–3)",
+y = "Proportion") +
+theme_minimal()
+
+# Thalassemia vs heart disease
+
+ggplot(heart, aes(x = thal, fill = target)) +
+geom_bar(position = "fill") +
+scale_fill_manual(values = disease_colors, name = "Disease") +
+labs(title = "Heart Disease Proportion by Thalassemia Type",
+x = "Thal (3 = Normal, 6 = Fixed Defect, 7 = Reversible Defect)",
+y = "Proportion") +
+theme_minimal()
+
+```
+
+The plots show a positive relationship between heart disease proportion and number of major vessels, as well as a higher heart disease prevalence among the groups with fixed defect and reversible defect thalassemia types.
+
+**Correlations Between Numeric Predictors and Outcome**
+
+```{r, echo=FALSE, fig.height=3, message=FALSE, warning=FALSE}
+# Correlation heatmap using only numeric predictors
+
+numeric_vars <- heart %>% dplyr::select(where(is.numeric))
+
+corr_matrix <- round(cor(numeric_vars, use = "complete.obs"), 2)
+
+if (!requireNamespace("reshape2", quietly = TRUE)) {
+install.packages("reshape2")
+}
+library(reshape2)
+
+corr_long <- melt(corr_matrix)
+
+ggplot(corr_long, aes(Var1, Var2, fill = value)) +
+geom_tile(color = "white") +
+geom_text(aes(label = value), color = "black", size = 3) +
+scale_fill_gradient2(low = "steelblue", high = "firebrick", mid = "white", midpoint = 0) +
+labs(title = "Correlation Heatmap for Numeric Predictors and Outcome",
+x = "",
+y = "") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The correlation matrix shows that thalach (maximum heart rate) is moderately negatively correlated with heart disease (-0.42), indicating that patients achieving lower exercise heart rates are more likely to have the condition. In contrast, variables such as oldpeak, age, and resting blood pressure show weak positive correlations with disease (around 0.15-0.22), suggesting only mild linear associations. Overall, no single numeric predictor is strongly correlated with the outcome, supporting the need for multivariate modeling rather than relying on individual variables.
+
+### Modelling
+
+To build our predictive models for heart disease, we first created an 80/20 train–test split using only complete cases to ensure clean and reproducible evaluation. We began with two baseline methods: a simple linear regression model and a logistic regression model trained on the numeric predictors, converting predicted probabilities into binary disease classifications using a standard 0.5 threshold. We then expanded the analysis to capture nonlinear patterns by training a decision tree model using the rpart algorithm, tuning its complexity parameter through 10-fold cross-validation. To further improve predictive performance, we implemented a penalized logistic regression model using glmnet, which performs regularization and variable selection. This model was trained using caret’s ROC-optimized cross-validation strategy. Finally, we evaluated a grid of probability cutoff values on the training set and selected the value that maximized balanced accuracy before applying it once to the held-out test set, thereby avoiding data leakage. Altogether, this stepwise progression allowed us to systematically develop increasingly robust predictors of heart disease.
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+###
+### Modeling
+###
+
+# LINEAR MODEL
+
+# Keep only numeric predictors + numeric target
+heart_numeric <- heart %>%
+  select(where(is.numeric))  # includes target_numeric
+
+# Create train/test split
+set.seed(123)
+train_index <- createDataPartition(heart_numeric$target_numeric, p = 0.8, list = FALSE)
+
+train_data <- heart_numeric[train_index, ]
+test_data  <- heart_numeric[-train_index, ]
+
+# Train a simple linear regression model using caret
+lm_model <- train(
+  target_numeric ~ .,
+  data   = train_data,
+  method = "lm"
+)
+
+
+# Predict numeric probabilities on the test set
+lm_preds <- predict(lm_model, newdata = test_data)
+
+# Convert numeric predictions to class labels with threshold 0.5
+lm_class_preds <- ifelse(lm_preds > 0.5, "disease", "no_disease")
+
+# True labels from target_numeric
+test_labels <- ifelse(test_data$target_numeric == 1, "disease", "no_disease")
+
+# Confusion matrix and basic accuracy metrics
+cm <- confusionMatrix(
+  factor(lm_class_preds, levels = c("no_disease", "disease")),
+  factor(test_labels,      levels = c("no_disease", "disease"))
+)
+
+
+## LOGISTIC REGRESSION
+
+# Train logistic regression model using caret
+glm_model <- train(
+  target_numeric ~ .,
+  data = train_data,
+  method = "glm",
+  family = binomial,
+  trControl = trainControl(method = "none")  # no CV yet, simple baseline
+)
+
+
+# Predict probabilities on the test set
+glm_probs <- predict(glm_model, newdata = test_data)
+
+# caret's glm doesn't always return prob unless outcome is factor,
+# so compute probabilities manually if needed
+glm_probs_numeric <- predict(glm_model, newdata = test_data, type = "raw")
+
+# Convert probabilities to class labels using threshold 0.5
+glm_class_preds <- ifelse(glm_probs_numeric > 0.5, "disease", "no_disease")
+
+# True labels from target_numeric
+test_labels <- ifelse(test_data$target_numeric == 1, "disease", "no_disease")
+
+# Confusion matrix and accuracy metrics
+glm_cm <- confusionMatrix(
+  factor(glm_class_preds, levels = c("no_disease", "disease")),
+  factor(test_labels,      levels = c("no_disease", "disease"))
+)
+
+
+
+## DESCISION TREES
+if(!requireNamespace("rpart", quietly = TRUE)) install.packages("rpart")
+if(!requireNamespace("rpart.plot", quietly = TRUE)) install.packages("rpart.plot")
+library(rpart)
+library(rpart.plot)
+
+# Make sure target is a factor with levels "no_disease", "disease"
+heart$target <- factor(heart$target, levels = c("no_disease", "disease"))
+
+# Remove numeric target from predictors for this model
+heart_tree <- heart %>% select(-target_numeric)
+
+# Remove rows with missing values
+heart_clean <- heart_tree %>% 
+  filter(complete.cases(.))
+
+# Train/test split based on factor target
+set.seed(123)
+tree_index <- createDataPartition(heart_clean$target, p = 0.8, list = FALSE)
+
+tree_train <- heart_clean[tree_index, ]
+tree_test  <- heart_clean[-tree_index, ]
+
+# Set up cross-validation for tuning the tree
+tree_ctrl <- trainControl(
+  method = "cv",
+  number = 10
+)
+
+# Train a decision tree model using caret (rpart) with tuning
+set.seed(123)
+tree_model <- train(
+  target ~ .,
+  data = tree_train,
+  method = "rpart",
+  trControl = tree_ctrl,
+  tuneLength = 10  # try several cp values
+)
+
+# Predict class labels on the test set
+tree_preds <- predict(tree_model, newdata = tree_test)
+
+# Confusion matrix and basic metrics (treat "disease" as positive class)
+tree_cm <- confusionMatrix(
+  tree_preds,
+  tree_test$target,
+  positive = "disease"
+)
+
+
+
+## LOGISTIC REGRESSION — Penalized (glmnet) with CV
+## Includes explicit install-if-needed checks for each package
+
+# Check and install packages
+if (!requireNamespace("glmnet", quietly = TRUE)) {
+  install.packages("glmnet", repos = "https://cloud.r-project.org")
+}
+
+library(glmnet)
+
+# Prepare dataset — keep factor target, drop numeric target
+heart_glm <- heart %>%
+  select(-target_numeric) %>%
+  filter(complete.cases(.))
+
+# Train/test split (80/20)
+set.seed(123)
+glm_index <- createDataPartition(heart_glm$target, p = 0.8, list = FALSE)
+
+glm_train <- heart_glm[glm_index, ]
+glm_test  <- heart_glm[-glm_index, ]
+
+# Caret train control for 10-fold CV and ROC optimization
+glm_ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+# Train penalized logistic regression (glmnet)
+set.seed(123)
+glmnet_model <- train(
+  target ~ .,
+  data = glm_train,
+  method = "glmnet",
+  trControl = glm_ctrl,
+  metric = "ROC",
+  tuneLength = 10
+)
+
+# Predict probabilities on test set
+glmnet_probs <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
+
+# Convert probs to classes with 0.5 threshold
+glmnet_class <- ifelse(glmnet_probs > 0.5, "disease", "no_disease")
+
+# True labels
+true_labels <- glm_test$target
+
+# Confusion matrix
+glmnet_cm <- confusionMatrix(
+  factor(glmnet_class, levels = c("no_disease", "disease")),
+  factor(true_labels,   levels = c("no_disease", "disease"))
+)
+
+
+# Extract coefficients of the final model at best lambda
+best_lambda <- glmnet_model$bestTune$lambda
+# coef(glmnet_model$finalModel, s = best_lambda)
+
+
+
+
+
+
+```
+
+## Results
+
+### Model Selection
+
+```{r, echo=FALSE}
+# Load knitr for kable
+if (!requireNamespace("knitr", quietly = TRUE)) {
+  install.packages("knitr")
+}
+library(knitr)
+
+# Extract metrics from each confusion matrix
+model_metrics <- data.frame(
+  Model = c("Linear Regression", 
+            "Logistic Regression (GLM)",
+            "Decision Tree (rpart)",
+            "Penalized Logistic Regression (glmnet)"),
+
+  Accuracy = c(
+    cm$overall["Accuracy"],
+    glm_cm$overall["Accuracy"],
+    tree_cm$overall["Accuracy"],
+    glmnet_cm$overall["Accuracy"]
+  ),
+
+  Sensitivity = c(
+    cm$byClass["Sensitivity"],
+    glm_cm$byClass["Sensitivity"],
+    tree_cm$byClass["Sensitivity"],
+    glmnet_cm$byClass["Sensitivity"]
+  ),
+
+  Specificity = c(
+    cm$byClass["Specificity"],
+    glm_cm$byClass["Specificity"],
+    tree_cm$byClass["Specificity"],
+    glmnet_cm$byClass["Specificity"]
+  ),
+
+  Balanced_Accuracy = c(
+    cm$byClass["Balanced Accuracy"],
+    glm_cm$byClass["Balanced Accuracy"],
+    tree_cm$byClass["Balanced Accuracy"],
+    glmnet_cm$byClass["Balanced Accuracy"]
+  )
+)
+
+# Print nicely with kable
+kable(
+  model_metrics,
+  digits = 3,
+  caption = "Comparison of Model Performance Metrics"
+)
+
+```
+
+Across the different models we evaluated, we observed substantial variation in predictive performance. The baseline linear regression model performed the weakest, with an accuracy of `r round(model_metrics$Accuracy[1], 3)` and a balanced accuracy of only `r round(model_metrics$Balanced_Accuracy[1], 3)`, indicating that this simple approach could not adequately separate patients with and without heart disease. Logistic regression improved performance considerably, achieving an accuracy of `r round(model_metrics$Accuracy[2], 3)` and a balanced accuracy of `r round(model_metrics$Balanced_Accuracy[2], 3)`, showing that a generalized linear model captures more of the underlying structure in the data. The decision tree produced comparable accuracy (`r round(model_metrics$Accuracy[3], 3)`) with a balanced accuracy of `r round(model_metrics$Balanced_Accuracy[3], 3)`, benefiting from its ability to model nonlinear interactions between clinical features. The best overall performance was obtained using penalized logistic regression (glmnet), which reached an accuracy of `r round(model_metrics$Accuracy[4], 3)` and the highest balanced accuracy of `r round(model_metrics$Balanced_Accuracy[4], 3)`. This demonstrates that regularization and embedded feature selection help improve generalization, likely by reducing overfitting and emphasizing the most relevant predictors.
+
+
+### Final Model Cutoff Tuning
+
+In the previous models, we relied on the conventional probability cutoff of 0.5 to convert predicted probabilities into binary disease classifications. However, this threshold is arbitrary and may not yield optimal clinical performance, especially when sensitivity and specificity are imbalanced. In this final modeling step, we treated the cutoff as a tunable hyperparameter and evaluated the penalized logistic regression model over a grid of probability thresholds ranging from 0.01 to 0.99 in increments of 0.01. We selected the value that maximized balanced accuracy on the training set and then assessed the model once on the held-out test set using this optimized threshold. The resulting performance metrics are summarized below.
+
+```{r, echo=FALSE, warning = FALSE, message=FALSE}
+
+## TUNNING PROB CUTOFF
+
+# Get predicted probabilities on the training set
+train_probs  <- predict(glmnet_model, glm_train, type = "prob")[, "disease"]
+train_labels <- glm_train$target
+
+# Grid of cutoffs to test
+cutoffs <- seq(0.01, 0.99, by = 0.01)
+
+# Data frame to store training performance for each cutoff
+results <- data.frame(
+  cutoff = cutoffs,
+  accuracy = NA,
+  sensitivity = NA,
+  specificity = NA,
+  balanced_accuracy = NA
+)
+
+# Loop over cutoffs and compute metrics on the training set
+for (i in seq_along(cutoffs)) {
+  c <- cutoffs[i]
+  preds <- ifelse(train_probs > c, "disease", "no_disease")
+  cm <- confusionMatrix(
+    factor(preds, levels = c("no_disease", "disease")),
+    factor(train_labels, levels = c("no_disease", "disease"))
+  )
+  results$accuracy[i]          <- cm$overall["Accuracy"]
+  results$sensitivity[i]       <- cm$byClass["Sensitivity"]
+  results$specificity[i]       <- cm$byClass["Specificity"]
+  results$balanced_accuracy[i] <- cm$byClass["Balanced Accuracy"]
+}
+
+# Pick cutoff that maximizes balanced accuracy on the training set
+best_row <- results[which.max(results$balanced_accuracy), ]
+best_cutoff <- best_row$cutoff
+
+# Now evaluate once on the test set using this cutoff (no leakage)
+test_probs  <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
+test_labels <- glm_test$target
+
+test_preds <- ifelse(test_probs > best_cutoff, "disease", "no_disease")
+
+final_cm <- confusionMatrix(
+  factor(test_preds, levels = c("no_disease", "disease")),
+  factor(test_labels, levels = c("no_disease", "disease"))
+)
+
+
+# 1. Get predicted probabilities on the training set
+train_probs  <- predict(glmnet_model, glm_train, type = "prob")[, "disease"]
+train_labels <- glm_train$target
+
+# 2. Cutoff grid to search
+cutoffs <- seq(0.01, 0.99, by = 0.01)
+
+# 3. Data frame to store training metrics
+results <- data.frame(
+  cutoff = cutoffs,
+  accuracy = NA,
+  sensitivity = NA,
+  specificity = NA,
+  balanced_accuracy = NA
+)
+
+# 4. Loop to compute performance at each cutoff
+for (i in seq_along(cutoffs)) {
+  c <- cutoffs[i]
+  preds <- ifelse(train_probs > c, "disease", "no_disease")
+  
+  cm <- confusionMatrix(
+    factor(preds, levels = c("no_disease", "disease")),
+    factor(train_labels, levels = c("no_disease", "disease"))
+  )
+  
+  results$accuracy[i]          <- cm$overall["Accuracy"]
+  results$sensitivity[i]       <- cm$byClass["Sensitivity"]
+  results$specificity[i]       <- cm$byClass["Specificity"]
+  results$balanced_accuracy[i] <- cm$byClass["Balanced Accuracy"]
+}
+
+# 5. Extract the best cutoff (max balanced accuracy)
+best_row <- results[which.max(results$balanced_accuracy), ]
+best_cutoff <- best_row$cutoff
+
+# 6. Evaluate the tuned model once on the test set
+test_probs  <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
+test_labels <- glm_test$target
+
+test_preds <- ifelse(test_probs > best_cutoff, "disease", "no_disease")
+
+final_cm <- confusionMatrix(
+  factor(test_preds, levels = c("no_disease", "disease")),
+  factor(test_labels, levels = c("no_disease", "disease"))
+)
+
+# 7. Build a tidy table of test metrics for kable
+cutoff_results_table <- data.frame(
+  Model = "Glmnet with Tuned Cutoff",
+  Cutoff = best_cutoff,
+  Accuracy = final_cm$overall["Accuracy"],
+  Sensitivity = final_cm$byClass["Sensitivity"],
+  Specificity = final_cm$byClass["Specificity"],
+  Balanced_Accuracy = final_cm$byClass["Balanced Accuracy"]
+)
+
+# 8. Print nicely with kable
+knitr::kable(
+  cutoff_results_table,
+  digits = 3,
+  row.names = FALSE,
+  caption = paste0(
+    "Performance of Penalized Logistic Regression with Tuned Probability Cutoff (Cutoff = ", 
+    round(best_cutoff, 3), 
+    ")"
+  )
+)
+
+
+```
+
+Using the optimized probability cutoff substantially improved the performance of the penalized logistic regression model. The selected threshold of `r round(cutoff_results_table$Cutoff[1], 2)` achieved an accuracy of `r round(cutoff_results_table$Accuracy[1], 3)`, with sensitivity increasing to `r round(cutoff_results_table$Sensitivity[1], 3)` and specificity reaching `r round(cutoff_results_table$Specificity[1], 3)`. This balance between correctly identifying patients with heart disease and avoiding false positives is reflected in the high balanced accuracy of `r round(cutoff_results_table$Balanced_Accuracy[1], 3)`. Overall, tuning the probability cutoff allowed the model to better align with the classification priorities of the task, resulting in a more clinically meaningful performance profile.
+
+
+## Conclusion
+
+In this project, we analyzed the Cleveland Heart Disease dataset to investigate the relationship between a range of clinical, demographic, and exercise-related predictors and the presence of heart disease. After conducting an exploratory analysis, we evaluated several predictive modeling approaches of increasing complexity, including linear regression, logistic regression, decision trees, and penalized logistic regression. Our results showed that models capable of capturing nonlinear relationships or applying regularization achieved substantially better performance than simpler baselines. In particular, the penalized logistic regression model with a tuned probability cutoff delivered the strongest overall predictive accuracy and class balance, suggesting that carefully calibrated thresholds and regularization techniques can meaningfully improve clinical classification tasks. While the dataset is relatively small and lacks external validation, this analysis demonstrates that well-designed statistical models can provide valuable support for early heart disease detection. Future work could incorporate larger datasets, richer features such as imaging or biometric time series.
+
+
+## References
+
+Kaggle (Feature Description)
+Ritwikb3. Heart Disease – Cleveland Dataset. Kaggle. Available at:
+https://www.kaggle.com/datasets/ritwikb3/heart-disease-cleveland
+
+UCI Machine Learning Repository (Dataset Source)
+Janosi, A., Steinbrunn, W., Pfisterer, M., & Detrano, R. (1989). Heart Disease Dataset (Cleveland subset). UCI Machine Learning Repository.
+https://archive.ics.uci.edu/ml/datasets/heart+disease
+
+Dua, D., & Graff, C. (2019). UCI Machine Learning Repository.
+University of California, Irvine.
+https://archive.ics.uci.edu/ml/index.php
+
+World Health Organization (CVD Statistics)
+World Health Organization (2022). Cardiovascular diseases (CVDs) – Fact sheet.
+https://www.who.int/news-room/fact-sheets/detail/cardiovascular-diseases-(cvds)
