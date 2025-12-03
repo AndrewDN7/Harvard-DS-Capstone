@@ -12,7 +12,8 @@ required_packages <- c(
   "readr",
   "dplyr",
   "janitor",
-  "caret"
+  "caret",
+  "tidyverse"
 )
 
 # Install any missing packages
@@ -209,6 +210,9 @@ ggplot(corr_long, aes(Var1, Var2, fill = value)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
+
+
+
 ###
 ### Modeling
 ###
@@ -233,8 +237,6 @@ lm_model <- train(
   method = "lm"
 )
 
-# Print model summary
-print(lm_model)
 
 # Predict numeric probabilities on the test set
 lm_preds <- predict(lm_model, newdata = test_data)
@@ -251,8 +253,6 @@ cm <- confusionMatrix(
   factor(test_labels,      levels = c("no_disease", "disease"))
 )
 
-print(cm)
-
 
 ## LOGISTIC REGRESSION
 
@@ -265,8 +265,6 @@ glm_model <- train(
   trControl = trainControl(method = "none")  # no CV yet, simple baseline
 )
 
-# Print model summary
-print(glm_model)
 
 # Predict probabilities on the test set
 glm_probs <- predict(glm_model, newdata = test_data)
@@ -287,7 +285,6 @@ glm_cm <- confusionMatrix(
   factor(test_labels,      levels = c("no_disease", "disease"))
 )
 
-print(glm_cm)
 
 
 ## DESCISION TREES
@@ -329,11 +326,6 @@ tree_model <- train(
   tuneLength = 10  # try several cp values
 )
 
-print(tree_model)
-
-# Optional: visualize the final tree
-rpart.plot(tree_model$finalModel)
-
 # Predict class labels on the test set
 tree_preds <- predict(tree_model, newdata = tree_test)
 
@@ -344,7 +336,6 @@ tree_cm <- confusionMatrix(
   positive = "disease"
 )
 
-print(tree_cm)
 
 
 ## LOGISTIC REGRESSION — Penalized (glmnet) with CV
@@ -389,9 +380,6 @@ glmnet_model <- train(
   tuneLength = 10
 )
 
-print(glmnet_model)
-plot(glmnet_model)
-
 # Predict probabilities on test set
 glmnet_probs <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
 
@@ -407,11 +395,52 @@ glmnet_cm <- confusionMatrix(
   factor(true_labels,   levels = c("no_disease", "disease"))
 )
 
-print(glmnet_cm)
 
 # Extract coefficients of the final model at best lambda
 best_lambda <- glmnet_model$bestTune$lambda
-coef(glmnet_model$finalModel, s = best_lambda)
+# coef(glmnet_model$finalModel, s = best_lambda)
+
+
+
+
+# Extract metrics from each confusion matrix
+model_metrics <- data.frame(
+  Model = c("Linear Regression", 
+            "Logistic Regression (GLM)",
+            "Decision Tree (rpart)",
+            "Penalized Logistic Regression (glmnet)"),
+  
+  Accuracy = c(
+    cm$overall["Accuracy"],
+    glm_cm$overall["Accuracy"],
+    tree_cm$overall["Accuracy"],
+    glmnet_cm$overall["Accuracy"]
+  ),
+  
+  Sensitivity = c(
+    cm$byClass["Sensitivity"],
+    glm_cm$byClass["Sensitivity"],
+    tree_cm$byClass["Sensitivity"],
+    glmnet_cm$byClass["Sensitivity"]
+  ),
+  
+  Specificity = c(
+    cm$byClass["Specificity"],
+    glm_cm$byClass["Specificity"],
+    tree_cm$byClass["Specificity"],
+    glmnet_cm$byClass["Specificity"]
+  ),
+  
+  Balanced_Accuracy = c(
+    cm$byClass["Balanced Accuracy"],
+    glm_cm$byClass["Balanced Accuracy"],
+    tree_cm$byClass["Balanced Accuracy"],
+    glmnet_cm$byClass["Balanced Accuracy"]
+  )
+)
+
+
+model_metrics
 
 
 
@@ -450,7 +479,6 @@ for (i in seq_along(cutoffs)) {
 # Pick cutoff that maximizes balanced accuracy on the training set
 best_row <- results[which.max(results$balanced_accuracy), ]
 best_cutoff <- best_row$cutoff
-print(best_row)
 
 # Now evaluate once on the test set using this cutoff (no leakage)
 test_probs  <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
@@ -463,55 +491,75 @@ final_cm <- confusionMatrix(
   factor(test_labels, levels = c("no_disease", "disease"))
 )
 
-print(final_cm)
 
+# 1. Get predicted probabilities on the training set
+train_probs  <- predict(glmnet_model, glm_train, type = "prob")[, "disease"]
+train_labels <- glm_train$target
 
-# Load knitr for kable
-if (!requireNamespace("knitr", quietly = TRUE)) {
-  install.packages("knitr")
+# 2. Cutoff grid to search
+cutoffs <- seq(0.01, 0.99, by = 0.01)
+
+# 3. Data frame to store training metrics
+results <- data.frame(
+  cutoff = cutoffs,
+  accuracy = NA,
+  sensitivity = NA,
+  specificity = NA,
+  balanced_accuracy = NA
+)
+
+# 4. Loop to compute performance at each cutoff
+for (i in seq_along(cutoffs)) {
+  c <- cutoffs[i]
+  preds <- ifelse(train_probs > c, "disease", "no_disease")
+  
+  cm <- confusionMatrix(
+    factor(preds, levels = c("no_disease", "disease")),
+    factor(train_labels, levels = c("no_disease", "disease"))
+  )
+  
+  results$accuracy[i]          <- cm$overall["Accuracy"]
+  results$sensitivity[i]       <- cm$byClass["Sensitivity"]
+  results$specificity[i]       <- cm$byClass["Specificity"]
+  results$balanced_accuracy[i] <- cm$byClass["Balanced Accuracy"]
 }
-library(knitr)
 
-# Extract metrics from each confusion matrix
-model_metrics <- data.frame(
-  Model = c("Linear Regression", 
-            "Logistic Regression (GLM)",
-            "Decision Tree (rpart)",
-            "Penalized Logistic Regression (glmnet)"),
-  
-  Accuracy = c(
-    cm$overall["Accuracy"],
-    glm_cm$overall["Accuracy"],
-    tree_cm$overall["Accuracy"],
-    glmnet_cm$overall["Accuracy"]
-  ),
-  
-  Sensitivity = c(
-    cm$byClass["Sensitivity"],
-    glm_cm$byClass["Sensitivity"],
-    tree_cm$byClass["Sensitivity"],
-    glmnet_cm$byClass["Sensitivity"]
-  ),
-  
-  Specificity = c(
-    cm$byClass["Specificity"],
-    glm_cm$byClass["Specificity"],
-    tree_cm$byClass["Specificity"],
-    glmnet_cm$byClass["Specificity"]
-  ),
-  
-  Balanced_Accuracy = c(
-    cm$byClass["Balanced Accuracy"],
-    glm_cm$byClass["Balanced Accuracy"],
-    tree_cm$byClass["Balanced Accuracy"],
-    glmnet_cm$byClass["Balanced Accuracy"]
+# 5. Extract the best cutoff (max balanced accuracy)
+best_row <- results[which.max(results$balanced_accuracy), ]
+best_cutoff <- best_row$cutoff
+
+# 6. Evaluate the tuned model once on the test set
+test_probs  <- predict(glmnet_model, glm_test, type = "prob")[, "disease"]
+test_labels <- glm_test$target
+
+test_preds <- ifelse(test_probs > best_cutoff, "disease", "no_disease")
+
+final_cm <- confusionMatrix(
+  factor(test_preds, levels = c("no_disease", "disease")),
+  factor(test_labels, levels = c("no_disease", "disease"))
+)
+
+# 7. Build a tidy table of test metrics for kable
+cutoff_results_table <- data.frame(
+  Model = "Glmnet with Tuned Cutoff",
+  Cutoff = best_cutoff,
+  Accuracy = final_cm$overall["Accuracy"],
+  Sensitivity = final_cm$byClass["Sensitivity"],
+  Specificity = final_cm$byClass["Specificity"],
+  Balanced_Accuracy = final_cm$byClass["Balanced Accuracy"]
+)
+
+# 8. Print nicely with kable
+knitr::kable(
+  cutoff_results_table,
+  digits = 3,
+  row.names = FALSE,
+  caption = paste0(
+    "Performance of Penalized Logistic Regression with Tuned Probability Cutoff (Cutoff = ", 
+    round(best_cutoff, 3), 
+    ")"
   )
 )
 
-# Print nicely with kable
-kable(
-  model_metrics,
-  digits = 3,
-  caption = "Comparison of Model Performance Metrics"
-)
+
 
