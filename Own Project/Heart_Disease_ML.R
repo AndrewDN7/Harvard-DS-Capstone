@@ -1,3 +1,9 @@
+# Heart disease classification model: This script aims at developing several
+# Machine Learning Model using the UCI Heart Disease (Cleveland) Dataset.
+# The goal is to predict the presence of heart disease using a set of demographic and
+# physiological predictors.
+
+
 ###
 ### Installing packages
 ###
